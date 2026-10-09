@@ -4,42 +4,49 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-const FONNTE_TOKEN = process.env.FONNTE_TOKEN;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GAS_URL = process.env.GAS_URL;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-app.get('/', (req, res) => res.send('Server Bot Keuangan Sekolah Aktif!'));
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+app.get('/', (req, res) => res.send('Server Bot Telegram Keuangan Sekolah Aktif!'));
 app.get('/webhook', (req, res) => res.send('Endpoint Webhook Ready!'));
-app.get('/api/webhook', (req, res) => res.send('Endpoint API Webhook Ready!'));
 
-const handleWebhook = async (req, res) => {
+app.post(['/webhook', '/api/webhook'], async (req, res) => {
   try {
-    const body = req.body;
-    console.log('--- PAYLOAD MASUK DARI FONNTE ---');
-    console.log(JSON.stringify(body, null, 2));
+    const message = req.body.message;
+    if (!message) return res.status(200).send('OK');
 
-    const sender = body.sender || body.pengirim;
-    // Ambil URL media dari parameter standar Fonnte (url, file, atau media)
-    const mediaUrl = body.url || body.file || body.media;
+    const chatId = message.chat.id;
 
-    if (mediaUrl && mediaUrl !== "" && mediaUrl !== "non-text message") {
-      console.log(`[PROSES] Foto nota terdeteksi! URL: ${mediaUrl}`);
+    // Cek apakah pesan berisi foto
+    if (message.photo && message.photo.length > 0) {
+      console.log(`[PROSES] Foto nota diterima dari Chat ID: ${chatId}`);
 
-      // 1. Unduh gambar dari URL media Fonnte
-      const imageDownload = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+      // 1. Ambil foto dengan resolusi tertinggi (elemen terakhir dalam array photo)
+      const photo = message.photo[message.photo.length - 1];
+      const fileId = photo.file_id;
+
+      // 2. Dapatkan file_path dari Telegram API
+      const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+      const filePath = fileRes.data.result.file_path;
+      const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
+
+      // 3. Unduh gambar ke buffer
+      const imageDownload = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
       const imageBuffer = Buffer.from(imageDownload.data);
-      const mimeType = imageDownload.headers['content-type'] || 'image/jpeg';
+      const mimeType = 'image/jpeg';
 
-      // 2. Ekstraksi dengan Gemini API
+      // 4. Ekstraksi dengan Gemini API
       console.log('[PROSES] Memanggil Gemini API...');
       const geminiResult = await scanNotaWithGemini(imageBuffer, mimeType);
       console.log('[SUKSES] Hasil Gemini:', geminiResult);
 
-      // 3. Kirim ke Google Apps Script
+      // 5. Kirim data ke Google Apps Script
       if (GAS_URL) {
-        console.log('[PROSES] Mengirim data ke Google Apps Script...');
+        console.log('[PROSES] Menyimpan ke Google Sheets...');
         await axios.post(GAS_URL, {
           tanggal: geminiResult.tanggal,
           nominal: geminiResult.total_belanja,
@@ -50,36 +57,28 @@ const handleWebhook = async (req, res) => {
         });
       }
 
-      // 4. Balas ke WhatsApp via Fonnte
-      if (FONNTE_TOKEN) {
-        const formattedNominal = Number(geminiResult.total_belanja || 0).toLocaleString('id-ID');
-        const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 
-          ? geminiResult.items.join(', ') 
-          : '-';
+      // 6. Balas pesan ke Telegram
+      const formattedNominal = Number(geminiResult.total_belanja || 0).toLocaleString('id-ID');
+      const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 ? geminiResult.items.join(', ') : '-';
 
-        const pesanBalasan = `✅ *Nota Berhasil Dicatat!*\n\n` +
-          `• *Toko*: ${geminiResult.toko || '-'}\n` +
-          `• *Tanggal*: ${geminiResult.tanggal || '-'}\n` +
-          `• *Total*: Rp${formattedNominal}\n` +
-          `• *Detail*: ${itemsList}`;
+      const pesanBalasan = `✅ *Nota Berhasil Dicatat!*\n\n` +
+        `• *Toko*: ${geminiResult.toko || '-'}\n` +
+        `• *Tanggal*: ${geminiResult.tanggal || '-'}\n` +
+        `• *Total*: Rp${formattedNominal}\n` +
+        `• *Detail*: ${itemsList}`;
 
-        await kirimPesanFonnte(sender, pesanBalasan);
-        console.log('[SUKSES] Pesan konfirmasi terkirim ke WhatsApp!');
-      }
+      await kirimPesanTelegram(chatId, pesanBalasan);
+      console.log('[SUKSES] Konfirmasi terkirim ke Telegram!');
     } else {
-      console.log('[INFO] Pesan yang masuk tidak berisi URL gambar/media.');
+      await kirimPesanTelegram(chatId, 'Silakan kirimkan foto/gambar nota belanja untuk dicatat.');
     }
 
-    return res.status(200).json({ status: true, message: 'Processed successfully' });
-
+    return res.status(200).send('OK');
   } catch (err) {
-    console.error('[ERROR] Terjadi kesalahan pada Webhook:', err.message);
-    return res.status(500).json({ status: false, error: err.message });
+    console.error('[ERROR] Terjadi kesalahan:', err.message);
+    return res.status(200).send('OK');
   }
-};
-
-app.post('/webhook', handleWebhook);
-app.post('/api/webhook', handleWebhook);
+});
 
 async function scanNotaWithGemini(buffer, mimeType) {
   const model = genAI.getGenerativeModel({
@@ -106,12 +105,12 @@ async function scanNotaWithGemini(buffer, mimeType) {
   return JSON.parse(result.response.text());
 }
 
-async function kirimPesanFonnte(target, text) {
-  await axios.post(
-    'https://api.fonnte.com/send',
-    { target: target, message: text },
-    { headers: { Authorization: FONNTE_TOKEN } }
-  );
+async function kirimPesanTelegram(chatId, text) {
+  await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'Markdown'
+  });
 }
 
 const PORT = process.env.PORT || 3000;
