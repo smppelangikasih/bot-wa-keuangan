@@ -21,40 +21,19 @@ const handleWebhook = async (req, res) => {
     console.log(JSON.stringify(body, null, 2));
 
     const sender = body.sender || body.pengirim;
-    let mediaUrl = body.url || body.file || body.media;
-
-    // Ambil media dari API Fonnte via endpoint resmi /fetch-media jika URL utama kosong
-    if ((!mediaUrl || mediaUrl === "non-text message") && (body.id || body.inboxid) && FONNTE_TOKEN) {
-      const msgId = body.id || body.inboxid;
-      console.log(`Mencoba mengambil media dari API Fonnte untuk Message ID: ${msgId}...`);
-      try {
-        const mediaRes = await axios.post(
-          'https://api.fonnte.com/fetch-media',
-          { id: msgId },
-          { headers: { Authorization: FONNTE_TOKEN } }
-        );
-        
-        if (mediaRes.data && (mediaRes.data.url || mediaRes.data.file)) {
-          mediaUrl = mediaRes.data.url || mediaRes.data.file;
-          console.log(`Media URL berhasil didapatkan: ${mediaUrl}`);
-        } else {
-          console.log('Respon /fetch-media Fonnte:', mediaRes.data);
-        }
-      } catch (errApi) {
-        console.error('Gagal mengambil media dari API Fonnte:', errApi.message);
-      }
-    }
+    // Ambil URL media dari parameter standar Fonnte (url, file, atau media)
+    const mediaUrl = body.url || body.file || body.media;
 
     if (mediaUrl && mediaUrl !== "" && mediaUrl !== "non-text message") {
       console.log(`[PROSES] Foto nota terdeteksi! URL: ${mediaUrl}`);
 
-      // 1. Unduh gambar
+      // 1. Unduh gambar dari URL media Fonnte
       const imageDownload = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
       const imageBuffer = Buffer.from(imageDownload.data);
       const mimeType = imageDownload.headers['content-type'] || 'image/jpeg';
 
       // 2. Ekstraksi dengan Gemini API
-      console.log('[PROSES] Memanggil Gemini API untuk mengekstrak nota...');
+      console.log('[PROSES] Memanggil Gemini API...');
       const geminiResult = await scanNotaWithGemini(imageBuffer, mimeType);
       console.log('[SUKSES] Hasil Gemini:', geminiResult);
 
@@ -71,7 +50,7 @@ const handleWebhook = async (req, res) => {
         });
       }
 
-      // 4. Balas pesan ke WhatsApp
+      // 4. Balas ke WhatsApp via Fonnte
       if (FONNTE_TOKEN) {
         const formattedNominal = Number(geminiResult.total_belanja || 0).toLocaleString('id-ID');
         const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 
@@ -85,10 +64,10 @@ const handleWebhook = async (req, res) => {
           `• *Detail*: ${itemsList}`;
 
         await kirimPesanFonnte(sender, pesanBalasan);
-        console.log('[SUKSES] Pesan konfirmasi terkirim ke WA!');
+        console.log('[SUKSES] Pesan konfirmasi terkirim ke WhatsApp!');
       }
     } else {
-      console.log('[WARNING] Gambar tidak dapat diproses karena URL media kosong.');
+      console.log('[INFO] Pesan yang masuk tidak berisi URL gambar/media.');
     }
 
     return res.status(200).json({ status: true, message: 'Processed successfully' });
