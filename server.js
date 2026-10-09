@@ -82,7 +82,7 @@ app.post(['/webhook', '/api/webhook'], async (req, res) => {
 
 async function scanNotaWithGemini(buffer, mimeType) {
   const model = genAI.getGenerativeModel({
-    model: "gemini-3.8-flash",
+    model: "gemini-3.6-flash",
     generationConfig: { responseMimeType: "application/json" }
   });
 
