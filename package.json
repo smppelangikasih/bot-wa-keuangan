@@ -1,0 +1,15 @@
+{
+  "name": "bot-keuangan-sekolah",
+  "version": "1.0.0",
+  "description": "Bot WhatsApp Keuangan Sekolah via Fonnte & Gemini API",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "axios": "^1.6.8",
+    "express": "^4.19.2"
+  }
+}
