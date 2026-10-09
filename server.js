@@ -23,19 +23,22 @@ const handleWebhook = async (req, res) => {
     const sender = body.sender || body.pengirim;
     let mediaUrl = body.url || body.file || body.media;
 
-    // Jika Fonnte ngirim ID tapi URL-nya kosong, kita tarik gambar langsung via API Fonnte
-    if (!mediaUrl && (body.id || body.inboxid) && FONNTE_TOKEN) {
+    // Ambil media dari API Fonnte via endpoint resmi /fetch-media jika URL utama kosong
+    if ((!mediaUrl || mediaUrl === "non-text message") && (body.id || body.inboxid) && FONNTE_TOKEN) {
       const msgId = body.id || body.inboxid;
       console.log(`Mencoba mengambil media dari API Fonnte untuk Message ID: ${msgId}...`);
       try {
         const mediaRes = await axios.post(
-          'https://api.fonnte.com/get-media',
+          'https://api.fonnte.com/fetch-media',
           { id: msgId },
           { headers: { Authorization: FONNTE_TOKEN } }
         );
-        if (mediaRes.data && mediaRes.data.url) {
-          mediaUrl = mediaRes.data.url;
-          console.log(`Media URL berhasil didapatkan dari API Fonnte: ${mediaUrl}`);
+        
+        if (mediaRes.data && (mediaRes.data.url || mediaRes.data.file)) {
+          mediaUrl = mediaRes.data.url || mediaRes.data.file;
+          console.log(`Media URL berhasil didapatkan: ${mediaUrl}`);
+        } else {
+          console.log('Respon /fetch-media Fonnte:', mediaRes.data);
         }
       } catch (errApi) {
         console.error('Gagal mengambil media dari API Fonnte:', errApi.message);
