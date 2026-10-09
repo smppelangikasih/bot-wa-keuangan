@@ -13,7 +13,7 @@ const GAS_URL = process.env.GAS_URL;
 // Inisialisasi SDK Gemini API Resmi
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Handler GET (Agar Fonnte Tes Koneksi & Browser Tidak Error 404)
+// Handler GET (Mencegah error 404 saat Fonnte melakukan ping/tes koneksi)
 app.get('/', (req, res) => {
   res.send('Server Bot Keuangan Sekolah Aktif!');
 });
@@ -28,38 +28,44 @@ app.post('/webhook', async (req, res) => {
     const { sender, url, type } = req.body;
     console.log('Webhook dipanggil oleh Fonnte:', JSON.stringify(req.body));
 
-    // Cek jika ada gambar yang dikirim (baik tipe 'image' atau dari ekstensi URL)
+    // Cek apakah ada gambar yang dikirim (dari tipe 'image' atau ekstensi URL)
     const isImage = (type === 'image') || (url && url.match(/\.(jpeg|jpg|png|webp)/i));
 
     if (url && isImage) {
-      console.log(`Foto nota diterima dari: ${sender}`);
+      console.log(`Foto nota diterima dari nomor: ${sender}`);
 
       // 1. Unduh gambar dari Fonnte
       const imageDownload = await axios.get(url, { responseType: 'arraybuffer' });
       const imageBuffer = Buffer.from(imageDownload.data);
       const mimeType = imageDownload.headers['content-type'] || 'image/jpeg';
 
-      // 2. Ekstraksi data nota pakai Gemini API
+      // 2. Ekstraksi data nota menggunakan Gemini API
       console.log('Memproses gambar nota dengan Gemini API...');
       const geminiResult = await scanNotaWithGemini(imageBuffer, mimeType);
-      console.log('Hasil Gemini:', geminiResult);
+      console.log('Hasil Ekstraksi Gemini:', geminiResult);
 
-      // 3. Kirim data ke Google Sheets (via Google Apps Script)
+      // 3. Kirim data ke Google Sheets (Disesuaikan persis dengan fungsi doPost GAS kamu)
       if (GAS_URL) {
-        console.log('Mengirim data ke Google Sheets...');
-        await axios.post(GAS_URL, {
+        console.log('Mengirim data ke Google Apps Script...');
+        const gasPayload = {
           tanggal: geminiResult.tanggal,
           nominal: geminiResult.total_belanja,
-          keterangan: `Nota ${geminiResult.toko || 'Toko'} (${geminiResult.items ? geminiResult.items.join(', ') : 'Belanja'})`,
+          toko: geminiResult.toko,
           jenis: 'Pengeluaran',
-          tipe: 'Pengeluaran'
-        });
+          tipe: 'Pengeluaran',
+          keterangan: `Nota ${geminiResult.toko || 'Toko'} (${geminiResult.items && geminiResult.items.length > 0 ? geminiResult.items.join(', ') : 'Belanja'})`
+        };
+
+        const gasResponse = await axios.post(GAS_URL, gasPayload);
+        console.log('Respon dari GAS:', gasResponse.data);
       }
 
       // 4. Kirim balasan konfirmasi ke WhatsApp via Fonnte
       if (FONNTE_TOKEN) {
         const formattedNominal = Number(geminiResult.total_belanja || 0).toLocaleString('id-ID');
-        const itemsList = Array.isArray(geminiResult.items) ? geminiResult.items.join(', ') : '-';
+        const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 
+          ? geminiResult.items.join(', ') 
+          : '-';
 
         const pesanBalasan = `✅ *Nota Berhasil Dicatat!*\n\n` +
           `• *Toko*: ${geminiResult.toko || '-'}\n` +
@@ -68,13 +74,13 @@ app.post('/webhook', async (req, res) => {
           `• *Detail*: ${itemsList}`;
 
         await kirimPesanFonnte(sender, pesanBalasan);
-        console.log('Proses selesai dan pesan balasan terkirim!');
+        console.log('Pesan balasan berhasil dikirim ke WhatsApp!');
       }
     } else {
       console.log('Pesan diterima bukan berupa gambar nota.');
     }
 
-    // Kirim respon sukses ke Fonnte setelah seluruh proses selesai
+    // Kirim respon sukses ke Fonnte setelah seluruh eksekusi selesai
     return res.status(200).json({ status: true, message: 'Processed successfully' });
 
   } catch (err) {
@@ -83,7 +89,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Fungsi Analisis Nota Menggunakan Gemini
+// Fungsi Analisis Nota Menggunakan Gemini API
 async function scanNotaWithGemini(buffer, mimeType) {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
