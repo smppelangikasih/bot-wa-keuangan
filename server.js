@@ -21,63 +21,64 @@ app.get('/api/webhook', (req, res) => res.send('Endpoint API Webhook Ready!'));
 // Core Handler Webhook
 const handleWebhook = async (req, res) => {
   try {
-    const { sender } = req.body;
+    const { sender, message, pesan, id } = req.body;
     console.log('Webhook Data Received:', JSON.stringify(req.body));
 
-    // Menangkap URL media dari semua kemungkinan properti Fonnte
-    const mediaUrl = req.body.url || req.body.file || req.body.media;
+    // Cek URL dari body, jika kosong tapi ada ID pesan, ambil URL dari API Fonnte
+    let mediaUrl = req.body.url || req.body.file || req.body.media;
 
-    if (mediaUrl) {
-      console.log(`Foto nota diterima dari nomor: ${sender}`);
+    // Jika Fonnte tidak mengirim URL di webhook, kita panggil API Fonnte untuk ambil detail media
+    if (!mediaUrl && id && FONNTE_TOKEN) {
+      try {
+        const getMediaResponse = await axios.post(
+          'https://api.fonnte.com/get-media',
+          { id: id },
+          { headers: { Authorization: FONNTE_TOKEN } }
+        );
+        if (getMediaResponse.data && getMediaResponse.data.url) {
+          mediaUrl = getMediaResponse.data.url;
+        }
+      } catch (mediaErr) {
+        console.log('Gagal mengambil media dari API Fonnte:', mediaErr.message);
+      }
+    }
 
-      // 1. Unduh gambar dari Fonnte
+    if (mediaUrl && mediaUrl !== "" && mediaUrl !== "non-text message") {
+      console.log(`Foto nota diterima dari nomor: ${sender} | URL: ${mediaUrl}`);
+
+      // 1. Unduh gambar
       const imageDownload = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
       const imageBuffer = Buffer.from(imageDownload.data);
       const mimeType = imageDownload.headers['content-type'] || 'image/jpeg';
 
-      // 2. Ekstraksi data nota pakai Gemini API
+      // 2. Ekstraksi Gemini
       console.log('Memproses gambar nota dengan Gemini API...');
       const geminiResult = await scanNotaWithGemini(imageBuffer, mimeType);
-      console.log('Hasil Ekstraksi Gemini:', geminiResult);
 
-      // 3. Kirim ke Google Apps Script (Sesuai fungsi doPost GAS)
+      // 3. Kirim ke GAS
       if (GAS_URL) {
-        console.log('Mengirim data ke Google Apps Script...');
-        const gasPayload = {
+        await axios.post(GAS_URL, {
           tanggal: geminiResult.tanggal,
           nominal: geminiResult.total_belanja,
           toko: geminiResult.toko,
           jenis: 'Pengeluaran',
           tipe: 'Pengeluaran',
           keterangan: `Nota ${geminiResult.toko || 'Toko'} (${geminiResult.items && geminiResult.items.length > 0 ? geminiResult.items.join(', ') : 'Belanja'})`
-        };
-
-        const gasResponse = await axios.post(GAS_URL, gasPayload);
-        console.log('Respon dari GAS:', gasResponse.data);
+        });
       }
 
-      // 4. Balas konfirmasi ke WhatsApp via Fonnte
+      // 4. Balas ke WA
       if (FONNTE_TOKEN) {
         const formattedNominal = Number(geminiResult.total_belanja || 0).toLocaleString('id-ID');
-        const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 
-          ? geminiResult.items.join(', ') 
-          : '-';
-
-        const pesanBalasan = `✅ *Nota Berhasil Dicatat!*\n\n` +
-          `• *Toko*: ${geminiResult.toko || '-'}\n` +
-          `• *Tanggal*: ${geminiResult.tanggal || '-'}\n` +
-          `• *Total*: Rp${formattedNominal}\n` +
-          `• *Detail*: ${itemsList}`;
-
+        const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 ? geminiResult.items.join(', ') : '-';
+        const pesanBalasan = `✅ *Nota Berhasil Dicatat!*\n\n• *Toko*: ${geminiResult.toko || '-'}\n• *Tanggal*: ${geminiResult.tanggal || '-'}\n• *Total*: Rp${formattedNominal}\n• *Detail*: ${itemsList}`;
         await kirimPesanFonnte(sender, pesanBalasan);
-        console.log('Pesan konfirmasi terkirim ke WhatsApp!');
       }
     } else {
-      console.log('Pesan diterima bukan berupa gambar nota atau tidak ada URL media.');
+      console.log('Pesan bukan berupa media gambar yang dapat diunduh.');
     }
 
     return res.status(200).json({ status: true, message: 'Processed successfully' });
-
   } catch (err) {
     console.error('Terjadi kesalahan pada Webhook:', err.message);
     return res.status(500).json({ status: false, error: err.message });
