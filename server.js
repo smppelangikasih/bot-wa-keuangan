@@ -6,33 +6,28 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Variabel Lingkungan dari Vercel
+// Environment Variables dari Vercel
 const FONNTE_TOKEN = process.env.FONNTE_TOKEN;
 const GAS_URL = process.env.GAS_URL;
 
-// Inisialisasi SDK Gemini API Resmi
+// Inisialisasi SDK Gemini API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Handler GET (Mencegah error 404 saat Fonnte melakukan ping/tes koneksi)
-app.get('/', (req, res) => {
-  res.send('Server Bot Keuangan Sekolah Aktif!');
-});
+// Route GET untuk tes koneksi (Mencegah error 404 saat Fonnte/Browser ping)
+app.get('/', (req, res) => res.send('Server Bot Keuangan Sekolah Aktif!'));
+app.get('/webhook', (req, res) => res.send('Endpoint Webhook Ready!'));
+app.get('/api/webhook', (req, res) => res.send('Endpoint API Webhook Ready!'));
 
-app.get('/webhook', (req, res) => {
-  res.send('Endpoint Webhook Ready!');
-});
-
-// Webhook Endpoint Utama Penerima Pesan Fonnte (POST)
-app.post('/webhook', async (req, res) => {
+// Core Handler Webhook
+const handleWebhook = async (req, res) => {
   try {
-    const { sender, url, type } = req.body;
-    console.log('Webhook dipanggil oleh Fonnte:', JSON.stringify(req.body));
+    const { sender } = req.body;
+    console.log('Webhook Data Received:', JSON.stringify(req.body));
 
-    // Cek jika ada media gambar yang dikirim dari Fonnte
-    const mediaUrl = url || req.body.file || req.body.media;
-    const isImage = (type === 'image') || (mediaUrl && mediaUrl.match(/\.(jpeg|jpg|png|webp)/i)) || req.body.file;
+    // Menangkap URL media dari semua kemungkinan properti Fonnte
+    const mediaUrl = req.body.url || req.body.file || req.body.media;
 
-    if (mediaUrl && isImage) {
+    if (mediaUrl) {
       console.log(`Foto nota diterima dari nomor: ${sender}`);
 
       // 1. Unduh gambar dari Fonnte
@@ -40,12 +35,12 @@ app.post('/webhook', async (req, res) => {
       const imageBuffer = Buffer.from(imageDownload.data);
       const mimeType = imageDownload.headers['content-type'] || 'image/jpeg';
 
-      // 2. Ekstraksi data nota menggunakan Gemini API
+      // 2. Ekstraksi data nota pakai Gemini API
       console.log('Memproses gambar nota dengan Gemini API...');
       const geminiResult = await scanNotaWithGemini(imageBuffer, mimeType);
       console.log('Hasil Ekstraksi Gemini:', geminiResult);
 
-      // 3. Kirim data ke Google Sheets (Disesuaikan persis dengan fungsi doPost GAS kamu)
+      // 3. Kirim ke Google Apps Script (Sesuai fungsi doPost GAS)
       if (GAS_URL) {
         console.log('Mengirim data ke Google Apps Script...');
         const gasPayload = {
@@ -61,7 +56,7 @@ app.post('/webhook', async (req, res) => {
         console.log('Respon dari GAS:', gasResponse.data);
       }
 
-      // 4. Kirim balasan konfirmasi ke WhatsApp via Fonnte
+      // 4. Balas konfirmasi ke WhatsApp via Fonnte
       if (FONNTE_TOKEN) {
         const formattedNominal = Number(geminiResult.total_belanja || 0).toLocaleString('id-ID');
         const itemsList = Array.isArray(geminiResult.items) && geminiResult.items.length > 0 
@@ -75,29 +70,32 @@ app.post('/webhook', async (req, res) => {
           `• *Detail*: ${itemsList}`;
 
         await kirimPesanFonnte(sender, pesanBalasan);
-        console.log('Pesan balasan berhasil dikirim ke WhatsApp!');
+        console.log('Pesan konfirmasi terkirim ke WhatsApp!');
       }
     } else {
-      console.log('Pesan diterima bukan berupa gambar nota.');
+      console.log('Pesan diterima bukan berupa gambar nota atau tidak ada URL media.');
     }
 
-    // Kirim respon sukses ke Fonnte setelah seluruh eksekusi selesai
     return res.status(200).json({ status: true, message: 'Processed successfully' });
 
   } catch (err) {
     console.error('Terjadi kesalahan pada Webhook:', err.message);
     return res.status(500).json({ status: false, error: err.message });
   }
-});
+};
 
-// Fungsi Analisis Nota Menggunakan Gemini API
+// Daftarkan endpoint POST untuk kedua opsi URL
+app.post('/webhook', handleWebhook);
+app.post('/api/webhook', handleWebhook);
+
+// Fungsi Analisis Gambar dengan Gemini
 async function scanNotaWithGemini(buffer, mimeType) {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: { responseMimeType: "application/json" }
   });
 
-  const prompt = `Analisis foto nota ini. Ekstrak data dalam format JSON murni dengan properti persis seperti berikut:
+  const prompt = `Analisis foto nota ini. Ekstrak data dalam format JSON murni dengan struktur berikut:
   {
     "toko": "Nama Toko / Vendor",
     "tanggal": "YYYY-MM-DD",
@@ -116,23 +114,16 @@ async function scanNotaWithGemini(buffer, mimeType) {
   return JSON.parse(result.response.text());
 }
 
-// Fungsi Pengiriman Pesan Fonnte
+// Fungsi Kirim Pesan via Fonnte
 async function kirimPesanFonnte(target, text) {
   await axios.post(
     'https://api.fonnte.com/send',
-    {
-      target: target,
-      message: text
-    },
-    {
-      headers: {
-        Authorization: FONNTE_TOKEN
-      }
-    }
+    { target: target, message: text },
+    { headers: { Authorization: FONNTE_TOKEN } }
   );
 }
 
-// Port Handler untuk Local & Vercel
+// Port Handler
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server aktif di port ${PORT}`));
 
