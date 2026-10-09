@@ -28,14 +28,15 @@ app.post('/webhook', async (req, res) => {
     const { sender, url, type } = req.body;
     console.log('Webhook dipanggil oleh Fonnte:', JSON.stringify(req.body));
 
-    // Cek apakah ada gambar yang dikirim (dari tipe 'image' atau ekstensi URL)
-    const isImage = (type === 'image') || (url && url.match(/\.(jpeg|jpg|png|webp)/i));
+    // Cek jika ada media gambar yang dikirim dari Fonnte
+    const mediaUrl = url || req.body.file || req.body.media;
+    const isImage = (type === 'image') || (mediaUrl && mediaUrl.match(/\.(jpeg|jpg|png|webp)/i)) || req.body.file;
 
-    if (url && isImage) {
+    if (mediaUrl && isImage) {
       console.log(`Foto nota diterima dari nomor: ${sender}`);
 
       // 1. Unduh gambar dari Fonnte
-      const imageDownload = await axios.get(url, { responseType: 'arraybuffer' });
+      const imageDownload = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
       const imageBuffer = Buffer.from(imageDownload.data);
       const mimeType = imageDownload.headers['content-type'] || 'image/jpeg';
 
